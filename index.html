@@ -128,8 +128,10 @@
         let maxTerrainHeight = 0; // 地形最高點
 
         // 視覺化調整係數
-        const WATER_VISUAL_EXAGGERATION_FACTOR = 50; // 將水深在視覺上放大 50 倍，使其更容易看到
-        const WATER_Z_OFFSET = 0.05; // 水面相對於地形的最小Z軸偏移量，避免Z-fighting
+        const WATER_VISUAL_EXAGGERATION_FACTOR = 200; // 將水深在視覺上放大 200 倍，使其更容易看到
+        const WATER_Z_OFFSET = 0.001; // 水面相對於地形的最小Z軸偏移量，避免Z-fighting (非常小的值)
+        const TERRAIN_Z_EXAGGERATION_FACTOR = 1.0; // 地形 Z 軸視覺放大係數，預設為 1.0 (不放大)
+                                                   // 如果地形起伏不明顯，可以嘗試 2.0, 5.0 等值
 
         const WATER_COLOR_BASE = new THREE.Color(0x0077ff); // 基本水藍色
         const WATER_COLOR_DEEP = new THREE.Color(0x003366); // 深水顏色
@@ -163,25 +165,47 @@
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0xadd8e6); // 天空藍
 
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+            // 計算地形尺寸
+            const terrainWidth = cols * dx_val;
+            const terrainHeight = rows * dy_val;
+            const terrainZRange = (terrainMaxZ - terrainMinZ) * TERRAIN_Z_EXAGGERATION_FACTOR; // 考慮 Z 軸放大
+
+            // 動態調整相機的 near 和 far 裁剪面
+            // near 應該足夠小以看到近處，far 應該足夠大以看到整個場景
+            const sceneDiagonal = Math.sqrt(terrainWidth * terrainWidth + terrainHeight * terrainHeight + terrainZRange * terrainZRange);
+            const cameraNear = 0.1;
+            const cameraFar = sceneDiagonal * 3; // 確保遠裁剪面足夠遠
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, cameraNear, cameraFar); 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
             // 環境光
-            const ambientLight = new THREE.AmbientLight(0x404040);
+            const ambientLight = new THREE.AmbientLight(0x606060); // 增加環境光強度
             scene.add(ambientLight);
 
             // 方向光 (模擬太陽)
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8); // 稍微亮一點
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0); // 增加方向光強度
             // 光源位置動態調整，使其位於地形上方並有一定角度
-            const terrainWidth = cols * dx_val;
-            const terrainHeight = rows * dy_val;
             const maxTerrainDim = Math.max(terrainWidth, terrainHeight);
-            const lightHeight = maxTerrainDim * 1.5 + (terrainMaxZ - terrainMinZ); // 光源高度
-            directionalLight.position.set(terrainWidth / 2 + maxTerrainDim * 0.5, lightHeight, terrainHeight / 2 + maxTerrainDim * 0.5);
-            directionalLight.castShadow = true; // 啟用陰影 (需要 renderer.shadowMap.enabled = true)
+            const lightHeight = terrainMaxZ * TERRAIN_Z_EXAGGERATION_FACTOR + maxTerrainDim * 1.5; // 光源高度考慮 Z 軸放大
+            directionalLight.position.set(terrainWidth / 2 + maxTerrainDim * 0.7, lightHeight, terrainHeight / 2 + maxTerrainDim * 0.7);
+            directionalLight.target.position.set(terrainWidth / 2, terrainMinZ * TERRAIN_Z_EXAGGERATION_FACTOR + terrainZRange / 2, terrainHeight / 2); // 光源目標指向地形中心
             scene.add(directionalLight);
+            scene.add(directionalLight.target); // 必須將 target 加入場景才能生效
+
+            // 設置陰影相機的範圍，以包含整個地形
+            const shadowCameraSize = Math.max(terrainWidth, terrainHeight) * 1.2; // 陰影相機的視口大小
+            directionalLight.shadow.camera.left = -shadowCameraSize / 2;
+            directionalLight.shadow.camera.right = shadowCameraSize / 2;
+            directionalLight.shadow.camera.top = shadowCameraSize / 2;
+            directionalLight.shadow.camera.bottom = -shadowCameraSize / 2;
+            directionalLight.shadow.camera.near = 0.1;
+            directionalLight.shadow.camera.far = lightHeight + terrainZRange + maxTerrainDim * 0.5; // 確保遠裁剪面足夠遠
+            directionalLight.shadow.mapSize.width = 2048; // 提高陰影解析度
+            directionalLight.shadow.mapSize.height = 2048;
+            // directionalLight.shadow.camera.updateProjectionMatrix(); // 更新陰影相機，如果需要可取消註釋
 
             // 設置渲染器以啟用陰影
             renderer.shadowMap.enabled = true;
@@ -191,12 +215,12 @@
             // 初始相機位置和目標，使其居中並能看到整個地形
             const centerX = cols * dx_val / 2;
             const centerY = rows * dy_val / 2;
-            const terrainCenterZ = (terrainMinZ + terrainMaxZ) / 2; // 地形中心高度
+            const terrainCenterZExaggerated = (terrainMinZ + terrainZRange / 2) * TERRAIN_Z_EXAGGERATION_FACTOR; // 考慮 Z 軸放大後的中心高度
 
             // 根據地形尺寸和高程範圍調整相機初始位置
-            const cameraDistance = Math.max(terrainWidth, terrainHeight, (terrainMaxZ - terrainMinZ) * 2) * 1.5; // 根據最大維度調整距離
-            camera.position.set(centerX + cameraDistance * 0.7, terrainCenterZ + cameraDistance * 0.7, centerY + cameraDistance * 0.7); // 調整視角
-            controls.target.set(centerX, terrainCenterZ, centerY); // 目標設在地形中心高度
+            const initialCameraDistance = Math.max(terrainWidth, terrainHeight, terrainZRange) * 1.5; // 根據最大維度調整距離
+            camera.position.set(centerX + initialCameraDistance * 0.7, terrainCenterZExaggerated + initialCameraDistance * 0.7, centerY + initialCameraDistance * 0.7); // 調整視角
+            controls.target.set(centerX, terrainCenterZExaggerated, centerY); // 目標設在地形中心高度
             controls.update();
 
             window.addEventListener('resize', onWindowResize, false);
@@ -234,7 +258,7 @@
             dx_val = dx;
             dy_val = dy;
 
-            // 計算地形的最低和最高點
+            // 計算地形的最低和最高點 (使用原始數據，因為 Z 軸放大僅為視覺效果)
             minTerrainHeight = Infinity;
             maxTerrainHeight = -Infinity;
             for (let i = 0; i < rows; i++) {
@@ -243,6 +267,9 @@
                     maxTerrainHeight = Math.max(maxTerrainHeight, originalTerrainData[i][j]);
                 }
             }
+            // 偵錯日誌：檢查地形高程範圍
+            console.log("Terrain Min Height:", minTerrainHeight, "Max Height:", maxTerrainHeight);
+
 
             // 初始化 Three.js 場景 (確保在創建 mesh 之前調用，並傳入高程範圍)
             initThreeJS(minTerrainHeight, maxTerrainHeight); 
@@ -251,14 +278,23 @@
             const terrainGeometry = new THREE.PlaneGeometry(cols * dx_val, rows * dy_val, cols - 1, rows - 1);
             const terrainVertices = terrainGeometry.attributes.position.array;
 
-            // 調整頂點高度
+            // 調整頂點高度 (應用 TERRAIN_Z_EXAGGERATION_FACTOR)
             for (let i = 0; i < rows; i++) {
                 for (let j = 0; j < cols; j++) {
                     const terrainVertexIndex = (i * cols + j) * 3 + 2; // Z軸
-                    terrainVertices[terrainVertexIndex] = originalTerrainData[i][j]; // 將地形高程賦給Z軸
+                    if (isNaN(originalTerrainData[i][j]) || !isFinite(originalTerrainData[i][j])) {
+                        console.error(`Invalid terrain height at [${i}, ${j}]:`, originalTerrainData[i][j]);
+                        terrainVertices[terrainVertexIndex] = ((minTerrainHeight + maxTerrainHeight) / 2) * TERRAIN_Z_EXAGGERATION_FACTOR; 
+                    } else {
+                        terrainVertices[terrainVertexIndex] = originalTerrainData[i][j] * TERRAIN_Z_EXAGGERATION_FACTOR; // 將地形高程賦給Z軸並放大
+                    }
                 }
             }
             terrainGeometry.computeVertexNormals(); 
+            if (!terrainGeometry.attributes.normal) {
+                console.warn("Terrain geometry normals not computed!");
+            }
+
 
             // 使用 MeshPhongMaterial 讓地形有更好的光照效果
             const terrainMaterial = new THREE.MeshPhongMaterial({ 
@@ -287,7 +323,7 @@
             for (let i = 0; i < rows; i++) {
                 for (let j = 0; j < cols; j++) {
                     const waterVertexIndex = (i * cols + j) * 3 + 2; // Z軸
-                    waterVertices[waterVertexIndex] = originalTerrainData[i][j] + WATER_Z_OFFSET; // 略高於地形避免Z-fighting
+                    waterVertices[waterVertexIndex] = originalTerrainData[i][j] * TERRAIN_Z_EXAGGERATION_FACTOR + WATER_Z_OFFSET; // 略高於地形避免Z-fighting，同時考慮地形 Z 軸放大
                 }
             }
             waterGeometry.computeVertexNormals();
@@ -328,22 +364,22 @@
                     maxCurrentWaterDepth = Math.max(maxCurrentWaterDepth, waterDepth);
                     totalAccumulatedWaterVolume += waterDepth * dx_val * dy_val; // 每個網格的體積累積 (m³)
 
-                    // 水面高度 = 地形高度 + (水深 * 視覺放大係數) + Z偏移
+                    // 水面高度 = (地形高度 * Z軸放大) + (水深 * 視覺放大係數) + Z偏移
                     // 只有當水深大於一個極小值時才顯示水
-                    if (waterDepth > 0.00001) { // 設定一個閾值，避免顯示極小的水滴
-                        waterVertices[vertexIndex] = terrainHeight + (waterDepth * WATER_VISUAL_EXAGGERATION_FACTOR) + WATER_Z_OFFSET; 
+                    if (waterDepth > 0.0000001) { // 將閾值進一步降低，確保極小水深也能被考慮
+                        waterVertices[vertexIndex] = (terrainHeight * TERRAIN_Z_EXAGGERATION_FACTOR) + (waterDepth * WATER_VISUAL_EXAGGERATION_FACTOR) + WATER_Z_OFFSET; 
                     } else {
-                        waterVertices[vertexIndex] = terrainHeight + WATER_Z_OFFSET; // 沒有水時，水面保持在地形上方一點點，但透明
+                        waterVertices[vertexIndex] = (terrainHeight * TERRAIN_Z_EXAGGERATION_FACTOR) + WATER_Z_OFFSET; // 沒有水時，水面保持在地形上方一點點，但透明
                     }
                     
                     // 調整水的顏色和透明度
                     const material = waterMesh.material;
-                    if (waterDepth > 0.00001) { // 只有有水時才改變顏色和透明度
+                    if (waterDepth > 0.0000001) { // 只有有水時才改變顏色和透明度
                         const ratio = Math.min(1, waterDepth / MAX_WATER_DEPTH_FOR_COLOR); // 將水深歸一化到 0-1
                         // 顏色從基本藍色漸變到深藍色
                         const interpolatedColor = new THREE.Color().copy(WATER_COLOR_BASE).lerp(WATER_COLOR_DEEP, ratio);
                         material.color.copy(interpolatedColor);
-                        material.opacity = Math.min(0.5 + ratio * 0.4, 0.9); // 透明度隨水深增加，最小 0.5
+                        material.opacity = Math.min(0.3 + ratio * 0.6, 0.9); // 透明度隨水深增加，最小從 0.3 開始，確保可見
                     } else {
                         material.opacity = 0; // 沒有水就完全透明
                     }
