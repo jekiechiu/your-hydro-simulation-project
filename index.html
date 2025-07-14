@@ -20,7 +20,7 @@
         #info-panel label { display: block; margin-bottom: 5px; font-weight: bold; }
         #info-panel input[type="file"],
         #info-panel input[type="number"],
-        #info-panel select { /* 新增 select 的樣式 */
+        #info-panel select {
             width: calc(100% - 12px);
             padding: 8px;
             margin-bottom: 10px;
@@ -36,7 +36,7 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 16px;
-            margin-top: 5px; /* 增加按鈕間距 */
+            margin-top: 5px;
         }
         #info-panel button:hover { background-color: #0056b3; }
         #simulation-status {
@@ -58,9 +58,9 @@
             align-items: center;
             font-size: 24px;
             z-index: 200;
-            display: none; /* 預設隱藏 */
+            display: none;
         }
-        .hint-text { /* 提示框樣式 */
+        .hint-text {
             font-size: 10px;
             color: gray;
             margin-top: -5px;
@@ -86,10 +86,10 @@
 
         <label for="rainfallType">降雨類型:</label>
         <select id="rainfallType">
-            <option value="A">A: 大雨 (80mm/24hr)</option>
-            <option value="B">B: 豪雨 (200mm/24hr)</option>
-            <option value="C">C: 豪大雨 (350mm/24hr)</option>
-            <option value="D">D: 超大豪雨 (500mm/24hr)</option>
+            <option value="A">A: 大雨 (150mm/24hr)</option>
+            <option value="B">B: 豪雨 (300mm/24hr)</option>
+            <option value="C">C: 豪大雨 (500mm/24hr)</option>
+            <option value="D">D: 超大豪雨 (700mm/24hr)</option>
         </select>
         <div class="hint-text">
             A: 150mm/24hr, B: 300mm/24hr,<br>
@@ -112,6 +112,7 @@
 
     <div id="loading-overlay">載入中 / 模擬中... 請稍候</div>
 
+    <!-- Three.js 函式庫，直接從 CDN 引入 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
@@ -120,7 +121,7 @@
         let scene, camera, renderer, controls;
         let terrainMesh, waterMesh;
         let originalTerrainData = []; // 擴展後的地形高程數據 (不含水)
-        let rows, cols;
+        let rows, cols; // 擴展後網格的行數和列數
         let dx_val_original, dy_val_original; // 儲存原始 dx, dy (用於與後端互動，但非直接用於 Three.js 幾何尺寸)
         let dx_val_expanded, dy_val_expanded; // 儲存擴展後的實際網格間距 (用於 Three.js 幾何尺寸和前端水量計算)
         let simulationInterval; // 用於控制 setInterval 的 ID
@@ -169,7 +170,7 @@
             // 計算地形尺寸 (使用擴展後的實際尺寸 dx_val_expanded, dy_val_expanded)
             const terrainWidth = cols * dx_val_expanded;
             const terrainHeight = rows * dy_val_expanded;
-            const terrainZRange = (maxTerrainHeight - minTerrainHeight) * TERRAIN_Z_EXAGGERATION_FACTOR; // 考慮 Z 軸放大
+            const terrainZRange = (terrainMaxZ - terrainMinZ) * TERRAIN_Z_EXAGGERATION_FACTOR; // 考慮 Z 軸放大
 
             // 動態調整相機的 near 和 far 裁剪面
             // near 應該足夠小以看到近處，far 應該足夠大以看到整個場景
@@ -270,7 +271,7 @@
                     maxTerrainHeight = Math.max(maxTerrainHeight, originalTerrainData[i][j]);
                 }
             }
-            // 偵錯日誌：檢查地形高程範圍
+            // Debug log: Check terrain height range
             console.log("Terrain Min Height:", minTerrainHeight, "Max Height:", maxTerrainHeight);
 
 
@@ -366,12 +367,12 @@
                     const waterDepth = waterDepthArray[i][j];
 
                     maxCurrentWaterDepth = Math.max(maxCurrentWaterDepth, waterDepth);
-                    // 修正：使用擴展後的實際網格單元面積來計算總體積
+                    // 使用擴展後的實際網格單元面積來計算總體積
                     totalAccumulatedWaterVolume += waterDepth * dx_val_expanded * dy_val_expanded; // 每個網格的體積累積 (m³)
 
                     // 水面高度 = (地形高度 * Z軸放大) + (水深 * 視覺放大係數) + Z偏移
                     // 只有當水深大於一個極小值時才顯示水
-                    if (waterDepth > 0.0000001) { // 將閾值進一步降低，確保極小水深也能被考慮
+                    if (waterDepth > 0.0000001) { // 閾值降低，確保極小水深也能被考慮
                         waterVertices[vertexIndex] = (terrainHeight * TERRAIN_Z_EXAGGERATION_FACTOR) + (waterDepth * WATER_VISUAL_EXAGGERATION_FACTOR) + WATER_Z_OFFSET; 
                     } else {
                         waterVertices[vertexIndex] = (terrainHeight * TERRAIN_Z_EXAGGERATION_FACTOR) + WATER_Z_OFFSET; // 沒有水時，水面保持在地形上方一點點，但透明
@@ -461,7 +462,7 @@
                 const data = await response.json();
 
                 if (data.status === "success") {
-                    console.log("模擬開始:", data);
+                    console.log("Simulation started:", data);
                     
                     // createTerrainAndWater 會在內部調用 initThreeJS
                     // 傳遞原始 dx, dy 和擴展後的 dx_expanded, dy_expanded
@@ -479,11 +480,11 @@
                     document.getElementById('toggleAnimationBtn').disabled = false; // 啟用播放/暫停按鈕
 
                 } else {
-                    alert('錯誤: ' + (data.error || '未知錯誤'));
+                    alert('Error: ' + (data.error || 'Unknown error'));
                 }
             } catch (error) {
-                console.error('API 請求失敗:', error);
-                alert('連線錯誤，請檢查伺服器狀態或後端日誌。');
+                console.error('API request failed:', error);
+                alert('Connection error, please check server status or backend logs.');
             } finally {
                 document.getElementById('loading-overlay').style.display = 'none'; // 隱藏載入中
                 document.getElementById('startSimulationBtn').disabled = false; // 啟用按鈕
@@ -500,10 +501,10 @@
                 if (isPaused) return; // 如果暫停，則不發送請求
 
                 if (currentFetchingStep >= total_steps) {
-                    console.log("模擬結束。");
+                    console.log("Simulation finished.");
                     clearInterval(simulationInterval);
                     document.getElementById('toggleAnimationBtn').disabled = true; // 模擬結束，禁用暫停/播放按鈕
-                    document.getElementById('toggleAnimationBtn').textContent = "模擬結束";
+                    document.getElementById('toggleAnimationBtn').textContent = "Simulation Finished";
                     return;
                 }
 
@@ -514,14 +515,14 @@
                     const data = await response.json();
 
                     if (data.status === "simulation_finished") {
-                        console.log("模擬結束 (來自後端)。");
+                        console.log("Simulation finished (from backend).");
                         clearInterval(simulationInterval);
                         document.getElementById('toggleAnimationBtn').disabled = true;
-                        document.getElementById('toggleAnimationBtn').textContent = "模擬結束";
+                        document.getElementById('toggleAnimationBtn').textContent = "Simulation Finished";
                     } else if (data.error) {
-                        console.error("獲取水深數據錯誤:", data.error);
+                        console.error("Error fetching water data:", data.error);
                         clearInterval(simulationInterval);
-                        alert("模擬過程中發生錯誤: " + data.error);
+                        alert("Error during simulation: " + data.error);
                     } else {
                         // 更新全局變數以確保 updateWaterDisplay 拿到最新的 expanded dx/dy
                         dx_val_expanded = data.dx_expanded; 
@@ -530,9 +531,9 @@
                         currentFetchingStep = data.current_step + 1; // 更新前端知道的下一個要獲取的步驟
                     }
                 } catch (error) {
-                    console.error('獲取水深數據失敗:', error);
+                    console.error('Failed to fetch water data:', error);
                     clearInterval(simulationInterval);
-                    alert('連線錯誤，無法獲取實時數據。');
+                    alert('Connection error, unable to fetch real-time data.');
                 }
             }, 500); // 每 500 毫秒 (0.5 秒) 更新一次
         }
