@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from flask import Flask, request, render_template_string
 import os
-from scipy.ndimage import zoom # 用於地形數據擴展
+from scipy.ndimage import zoom # 用於地形數據擴展 (但在此版本中不使用)
 
 app = Flask(__name__)
 
@@ -21,34 +21,26 @@ def run_water_simulation(original_height_map_raw, dx_original, dy_original, rain
 
     Returns:
         tuple: (
-            expanded_height_map_list: list[list[float]], # 擴展後的地形高程數據
+            expanded_height_map_list: list[list[float]], # 擴展後的地形高程數據 (此版本為原始數據)
             simulation_snapshots_list: list[list[list[float]]], # 每個時間步的水深數據快照
-            dx_expanded: float, # 擴展後每個網格單元在 X 方向的實際間距
-            dy_expanded: float  # 擴展後每個網格單元在 Y 方向的實際間距
+            dx_expanded: float, # 擴展後每個網格單元在 X 方向的實際間距 (此版本為原始間距)
+            dy_expanded: float  # 擴展後每個網格單元在 Y 方向的實際間距 (此版本為原始間距)
         )
     """
     
-    # 1. 地形數據預處理：將原始地形擴展 (插值)
-    # 這裡假設您的意圖是將每個原始間隔細化為 10 個小間隔 (即 10x10 個子單元)
-    effective_subdivision_factor = 10.0 
+    # 1. 地形數據預處理：不進行地形擴展 (細化因子固定為 1.0)
+    # 這將直接使用原始地形數據，避免因插值導致的性能和記憶體問題。
+    effective_subdivision_factor = 1.0 
 
-    # 判斷是否需要進行插值，避免對 1xN 或 Nx1 數據進行 order=3 的插值
-    if original_height_map_raw.shape[0] > 1 and original_height_map_raw.shape[1] > 1:
-        # 計算 zoom 因子，使原始網格的每個間隔被細化為 `effective_subdivision_factor` 個小間隔
-        zoom_level_y = ((original_height_map_raw.shape[0] - 1) * effective_subdivision_factor + 1) / (original_height_map_raw.shape[0] - 1)
-        zoom_level_x = ((original_height_map_raw.shape[1] - 1) * effective_subdivision_factor + 1) / (original_height_map_raw.shape[1] - 1)
-        
-        expanded_height_map = zoom(original_height_map_raw, zoom=(zoom_level_y, zoom_level_x), order=3)
-    else:
-        # 如果原始數據是 1xN, Nx1 或 1x1，不進行插值，直接使用原始數據
-        expanded_height_map = original_height_map_raw
-        effective_subdivision_factor = 1.0 # 在這種情況下，細化因子為 1
+    # 直接使用原始地形數據作為擴展後的地形
+    expanded_height_map = original_height_map_raw.copy().astype(float) # 確保數據類型為浮點數
 
     rows, cols = expanded_height_map.shape
     
     # 計算擴展後每個小網格單元在 X 和 Y 方向上的實際物理間距
-    dx_expanded = dx_original / effective_subdivision_factor
-    dy_expanded = dy_original / effective_subdivision_factor
+    # 由於不進行細化，這裡的擴展間距就是原始間距
+    dx_expanded = dx_original / effective_subdivision_factor # 等同於 dx_original
+    dy_expanded = dy_original / effective_subdivision_factor # 等同於 dy_original
 
     # 2. 降雨量計算
     # 根據台灣雨量規範定義的 24 小時總降雨量 (單位: mm)
@@ -110,11 +102,6 @@ def run_water_simulation(original_height_map_raw, dx_original, dy_original, rain
             current_total_height = current_state_map[r_idx, c_idx]
             current_water_depth = np.maximum(0, current_total_height - expanded_height_map[r_idx, c_idx])
 
-            # 如果當前點沒有水，或者水面高度低於所有鄰居，則不流動
-            if current_water_depth <= 0 or not neighbors_dict[(r_idx, c_idx)]:
-                net_flow_map[r_idx, c_idx] += new_rain_input[r_idx, c_idx] # 僅累積新降雨
-                continue
-
             # 找到比當前點 "水面總高" 更低的鄰居
             lower_neighbors = []
             for nr, nc in neighbors_dict[(r_idx, c_idx)]:
@@ -129,51 +116,44 @@ def run_water_simulation(original_height_map_raw, dx_original, dy_original, rain
                     if current_state_map[nr, nc] == min_neighbor_height
                 ]
 
-                # 計算可以流動的水量 (基於高度差)
-                # 這裡是一個簡化的流動模型：水會嘗試流向最低點直到水平
-                # 假設在一個時間步內，水可以完全流平到最低鄰居的高度
-                # 或者，更簡單地，將當前點的「新接收雨量」和部分現有積水分配給最低鄰居
-                
-                # 這裡我們將當前點的「新接收雨量」加上其自身的一部分積水，然後分配
-                # 為了避免過度流動導致負水深，我們只允許流動到與最低鄰居一樣高
-                
-                # 可流動的總水量 (當前點的積水 + 新降雨)
-                available_water_to_flow = current_water_depth + new_rain_input[r_idx, c_idx]
-                
-                # 如果所有鄰居都比自己高或一樣高，則水不流動，只累積
-                if min_neighbor_height >= current_total_height:
-                    net_flow_map[r_idx, c_idx] += new_rain_input[r_idx, c_idx]
-                    continue
+                # 這裡的邏輯是簡化版，只讓新降雨流動。
+                # 如果有積水，且自身水面高於最低鄰居水面，則嘗試流動部分積水
+                if current_water_depth > 0 or new_rain_input[r_idx, c_idx] > 0:
+                    # 計算可以流動的水量 (基於高度差)
+                    # 假設在一個時間步內，水可以完全流平到最低鄰居的高度
+                    
+                    # 簡化流動：將新降雨和部分積水均勻分配給所有較低的鄰居
+                    # 確保流動的水量不會導致自身水深為負
+                    
+                    # 重新考慮流動邏輯：水會從高處流向低處，直到達到相同高度或流盡
+                    # 我們需要計算每個點能流出多少水，以及流入多少水
+                    
+                    # 簡化：每個點在每個時間步，都會嘗試將其「水面總高」高於鄰居的部分，平均分配給所有較低的鄰居
+                    # 這裡只考慮新降雨的流動，不考慮已積水的流動，以避免複雜性。
+                    # 如果要考慮已積水的流動，需要一個單獨的「流動階段」
+                    
+                    # 由於我們在循環中更新 `new_rain_distribution_map`，這已經包含了流動的概念
+                    # 原始邏輯：將當前點的新接收雨量分配給最低鄰居
+                    
+                    # 優先流動新降雨
+                    flow_value_from_rain = new_rain_input[r_idx, c_idx] / len(lowest_points)
+                    for nr, nc in lowest_points:
+                        net_flow_map[nr, nc] += flow_value_from_rain
+                    net_flow_map[r_idx, c_idx] -= new_rain_input[r_idx, c_idx] # 從當前點流出新降雨
 
-                # 每個最低鄰居可以接收的水量，直到達到 min_neighbor_height
-                # 這裡的流動模型可以更複雜，但為了簡潔，我們假設可以流動到填滿低窪處
-                
-                # 簡化流動：將新降雨和部分積水均勻分配給所有較低的鄰居
-                flow_out_depth = new_rain_input[r_idx, c_idx] # 至少新降雨會流出
-                
-                # 嘗試將當前積水的一部分也流出
-                # 為了避免負水深，流出的積水不能超過當前積水
-                # 並且流出後，當前點的水面不能低於最低鄰居的地形高度
-                
-                # 這裡採用更穩定的方法：只將新降雨均勻分配給所有較低的鄰居
-                # 如果需要更複雜的流動，需要引入流量計算 (例如 Manning 公式)
-                
-                # 確保流動的水量不會導致自身水深為負
-                # 這裡我們只讓新降雨流動，已有的積水只在自身高度高於鄰居時才考慮流動
-                
-                # 重新考慮流動邏輯：水會從高處流向低處，直到達到相同高度或流盡
-                # 我們需要計算每個點能流出多少水，以及流入多少水
-                
-                # 簡化：每個點在每個時間步，都會嘗試將其「水面總高」高於鄰居的部分，平均分配給所有較低的鄰居
-                # 這裡只考慮新降雨的流動，不考慮已積水的流動，以避免複雜性。
-                # 如果要考慮已積水的流動，需要一個單獨的「流動階段」
-                
-                # 由於我們在循環中更新 `new_rain_distribution_map`，這已經包含了流動的概念
-                # 原始邏輯：將當前點的新接收雨量分配給最低鄰居
-                flow_value = new_rain_input[r_idx, c_idx] / len(lowest_points)
-                for nr, nc in lowest_points:
-                    net_flow_map[nr, nc] += flow_value
-                net_flow_map[r_idx, c_idx] -= new_rain_input[r_idx, c_idx] # 從當前點流出
+                    # 接著考慮積水的流動
+                    # 只有當前點的水面高於最低鄰居的水面時才流動
+                    if current_total_height > min_neighbor_height:
+                        # 計算可以流動的積水深度（直到與最低鄰居水面齊平）
+                        flowable_depth = current_total_height - min_neighbor_height
+                        # 實際流動的積水深度不能超過當前積水深度
+                        actual_flow_depth_from_current_water = min(current_water_depth, flowable_depth)
+                        
+                        if actual_flow_depth_from_current_water > 0:
+                            flow_value_from_current_water = actual_flow_depth_from_current_water / len(lowest_points)
+                            for nr, nc in lowest_points:
+                                net_flow_map[nr, nc] += flow_value_from_current_water
+                            net_flow_map[r_idx, c_idx] -= actual_flow_depth_from_current_water
 
             else:
                 # 如果沒有更低的鄰居，水就留在原地，累積新降雨
