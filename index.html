@@ -112,6 +112,7 @@
 
     <div id="loading-overlay">載入中 / 模擬中... 請稍候</div>
 
+    <!-- Three.js 函式庫，直接從 CDN 引入 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
@@ -123,8 +124,11 @@
         let rows, cols, dx_val, dy_val;
         let simulationInterval; // 用於控制 setInterval 的 ID
         let isPaused = false; // 控制播放/暫停的狀態
+        let minTerrainHeight = 0; // 地形最低點
+        let maxTerrainHeight = 0; // 地形最高點
 
         const WATER_COLOR_BASE = new THREE.Color(0x0077ff); // 基本水藍色
+        const WATER_COLOR_DEEP = new THREE.Color(0x003366); // 深水顏色
         const MAX_WATER_DEPTH_FOR_COLOR = 0.5; // 水深超過 0.5m 開始變色
 
         function initThreeJS() {
@@ -165,17 +169,25 @@
             scene.add(ambientLight);
 
             // 方向光 (模擬太陽)
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
-            // 根據地形尺寸調整光源位置，使其照亮整個區域
-            directionalLight.position.set(rows * dx_val / 2, Math.max(rows * dx_val, cols * dy_val) * 2, cols * dy_val / 2);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8); // 稍微亮一點
+            directionalLight.position.set(rows * dx_val * 0.5, Math.max(rows * dx_val, cols * dy_val) * 2, cols * dy_val * 0.5);
+            directionalLight.castShadow = true; // 啟用陰影 (需要 renderer.shadowMap.enabled = true)
             scene.add(directionalLight);
+
+            // 設置渲染器以啟用陰影
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 柔和陰影
 
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             // 初始相機位置和目標，使其居中並能看到整個地形
             const centerX = cols * dx_val / 2;
             const centerY = rows * dy_val / 2;
-            camera.position.set(centerX, Math.max(rows, cols) * dx_val * 1.5, centerY + Math.max(rows, cols) * dy_val * 1.5);
-            controls.target.set(centerX, 0, centerY); // 目標設在地形中心
+            const terrainCenterZ = (minTerrainHeight + maxTerrainHeight) / 2; // 地形中心高度
+
+            // 根據地形尺寸和高程範圍調整相機初始位置
+            const maxDim = Math.max(rows * dx_val, cols * dy_val);
+            camera.position.set(centerX + maxDim * 0.8, maxDim * 1.2 + (maxTerrainHeight - minTerrainHeight) * 2, centerY + maxDim * 0.8);
+            controls.target.set(centerX, terrainCenterZ, centerY); // 目標設在地形中心高度
             controls.update();
 
             window.addEventListener('resize', onWindowResize, false);
@@ -213,44 +225,79 @@
             dx_val = dx;
             dy_val = dy;
 
+            // 計算地形的最低和最高點
+            minTerrainHeight = Infinity;
+            maxTerrainHeight = -Infinity;
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    minTerrainHeight = Math.min(minTerrainHeight, originalTerrainData[i][j]);
+                    maxTerrainHeight = Math.max(maxTerrainHeight, originalTerrainData[i][j]);
+                }
+            }
+
             // 初始化 Three.js 場景 (確保在創建 mesh 之前調用)
             initThreeJS(); 
 
             // 地形網格
-            const terrainGeometry = new THREE.PlaneGeometry(cols * dx, rows * dy, cols - 1, rows - 1);
+            const terrainGeometry = new THREE.PlaneGeometry(cols * dx_val, rows * dy_val, cols - 1, rows - 1);
             const terrainVertices = terrainGeometry.attributes.position.array;
-
-            // 水面網格 (與地形網格結構相同，但 Z 值將動態更新)
-            const waterGeometry = new THREE.PlaneGeometry(cols * dx, rows * dy, cols - 1, rows - 1);
-            const waterVertices = waterGeometry.attributes.position.array;
 
             // 調整頂點高度
             for (let i = 0; i < rows; i++) {
                 for (let j = 0; j < cols; j++) {
                     const terrainVertexIndex = (i * cols + j) * 3 + 2; // Z軸
                     terrainVertices[terrainVertexIndex] = originalTerrainData[i][j]; // 將地形高程賦給Z軸
-                    
-                    // 水面初始高度與地形一致或略高，會根據水深更新
-                    waterVertices[terrainVertexIndex] = originalTerrainData[i][j] + 0.001; // 略高於地形避免Z-fighting
                 }
             }
             terrainGeometry.computeVertexNormals(); 
-            waterGeometry.computeVertexNormals();
 
-            const terrainMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513, flatShading: true }); // 棕色地形
+            // 使用 MeshPhongMaterial 讓地形有更好的光照效果
+            const terrainMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0x8B4513, // 棕色
+                specular: 0x111111, // 較低的鏡面反射
+                shininess: 30, // 光澤度
+                flatShading: true // 平面著色，看起來更有稜角
+            }); 
             terrainMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
 
             // 使地形中心位於 (0,0,0) 附近，便於旋轉
-            terrainMesh.position.x = -cols * dx / 2;
-            terrainMesh.position.z = -rows * dy / 2; 
-            terrainMesh.rotation.x = -Math.PI / 2; // 將平面X-Z變為X-Y平面
+            terrainMesh.position.x = -cols * dx_val / 2;
+            terrainMesh.position.y = -rows * dy_val / 2; // Three.js 預設 Y 軸向上，這裡將平面放在 X-Y
+            terrainMesh.rotation.x = -Math.PI / 2; // 將平面從 X-Y 旋轉到 X-Z (Z 軸向上)
+
+            terrainMesh.receiveShadow = true; // 地形接收陰影
+            terrainMesh.castShadow = true; // 地形投射陰影 (如果需要)
             scene.add(terrainMesh);
 
-            // 水面
-            waterMesh = new THREE.Mesh(waterGeometry, new THREE.MeshBasicMaterial({ color: WATER_COLOR_BASE, transparent: true, opacity: 0.0, side: THREE.DoubleSide }));
+
+            // 水面網格 (與地形網格結構相同，但 Z 值將動態更新)
+            const waterGeometry = new THREE.PlaneGeometry(cols * dx_val, rows * dy_val, cols - 1, rows - 1);
+            const waterVertices = waterGeometry.attributes.position.array;
+
+            // 水面初始高度與地形一致或略高，會根據水深更新
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    const waterVertexIndex = (i * cols + j) * 3 + 2; // Z軸
+                    waterVertices[waterVertexIndex] = originalTerrainData[i][j] + 0.01; // 略高於地形避免Z-fighting
+                }
+            }
+            waterGeometry.computeVertexNormals();
+
+            // 水面材質
+            waterMesh = new THREE.Mesh(waterGeometry, new THREE.MeshPhongMaterial({ 
+                color: WATER_COLOR_BASE, 
+                transparent: true, 
+                opacity: 0.0, // 初始完全透明
+                side: THREE.DoubleSide,
+                specular: 0xaaaaaa, // 增加鏡面反射，讓水看起來有光澤
+                shininess: 100 // 更高的光澤度
+            }));
             waterMesh.position.x = terrainMesh.position.x;
-            waterMesh.position.z = terrainMesh.position.z;
-            waterMesh.rotation.x = -Math.PI / 2; // 與地形保持一致的旋轉
+            waterMesh.position.y = terrainMesh.position.y;
+            waterMesh.rotation.x = terrainMesh.rotation.x; // 與地形保持一致的旋轉
+
+            waterMesh.receiveShadow = true; // 水面接收陰影
+            waterMesh.castShadow = true; // 水面投射陰影
             scene.add(waterMesh);
         }
 
@@ -280,13 +327,9 @@
                     const material = waterMesh.material;
                     if (waterDepth > 0) {
                         const ratio = Math.min(1, waterDepth / MAX_WATER_DEPTH_FOR_COLOR); // 將水深歸一化到 0-1
-                        // 從基本藍色到更深的藍色 (或帶一點綠色) 模擬水深增加
-                        const r = WATER_COLOR_BASE.r;
-                        const g = WATER_COLOR_BASE.g * (1 - ratio * 0.5); // 綠色分量可以稍微減少
-                        const b = WATER_COLOR_BASE.b * (1 - ratio * 0.2); // 藍色分量可以稍微減少
-                        
-                        // 讓它看起來更深，可以簡單地將顏色分量乘以一個因子
-                        material.color.setRGB(r * (1-ratio*0.3), g * (1-ratio*0.3), b * (1-ratio*0.3)); // 越深越暗
+                        // 顏色從基本藍色漸變到深藍色
+                        const interpolatedColor = new THREE.Color().copy(WATER_COLOR_BASE).lerp(WATER_COLOR_DEEP, ratio);
+                        material.color.copy(interpolatedColor);
                         material.opacity = Math.min(0.5 + ratio * 0.4, 0.9); // 透明度隨水深增加，最大 0.9
                     } else {
                         material.opacity = 0; // 沒有水就完全透明
@@ -294,7 +337,7 @@
                 }
             }
             waterMesh.geometry.attributes.position.needsUpdate = true; // 告知 Three.js 幾何體已更新
-            waterMesh.geometry.computeVertexNormals();
+            waterMesh.geometry.computeVertexNormals(); // 重新計算水面法線以正確渲染光照
 
             // 更新狀態顯示
             document.getElementById('maxWaterDepth').textContent = maxCurrentWaterDepth.toFixed(3) + ' m';
@@ -366,7 +409,6 @@
                 if (data.status === "success") {
                     console.log("模擬開始:", data);
                     
-                    // 初始化 Three.js 場景和地形模型
                     // createTerrainAndWater 會在內部調用 initThreeJS
                     createTerrainAndWater(data.terrain_data, data.rows, data.cols, data.dx, data.dy);
                     
