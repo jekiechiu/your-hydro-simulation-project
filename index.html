@@ -92,8 +92,8 @@
             <option value="D">D: 超大豪雨 (500mm/24hr)</option>
         </select>
         <div class="hint-text">
-            A: 80mm/24hr, B: 200mm/24hr,<br>
-            C: 350mm/24hr, D: 500mm/24hr
+            A: 150mm/24hr, B: 300mm/24hr,<br>
+            C: 500mm/24hr, D: 700mm/24hr
         </div>
 
 
@@ -129,14 +129,14 @@
         let maxTerrainHeight = 0; // 地形最高點
 
         // 視覺化調整係數
-        const WATER_VISUAL_EXAGGERATION_FACTOR = 200; // 將水深在視覺上放大 200 倍，使其更容易看到
-        const WATER_Z_OFFSET = 0.001; // 水面相對於地形的最小Z軸偏移量，避免Z-fighting (非常小的值)
+        const WATER_VISUAL_EXAGGERATION_FACTOR = 500; // 將水深在視覺上放大 500 倍，使其更容易看到
+        const WATER_Z_OFFSET = 0.005; // 水面相對於地形的最小Z軸偏移量，避免Z-fighting
         const TERRAIN_Z_EXAGGERATION_FACTOR = 1.0; // 地形 Z 軸視覺放大係數，預設為 1.0 (不放大)
                                                    // 如果地形起伏不明顯，可以嘗試 2.0, 5.0 等值
 
         const WATER_COLOR_BASE = new THREE.Color(0x0077ff); // 基本水藍色
         const WATER_COLOR_DEEP = new THREE.Color(0x003366); // 深水顏色
-        const MAX_WATER_DEPTH_FOR_COLOR = 0.5; // 水深超過 0.5m 開始變色
+        const MAX_WATER_DEPTH_FOR_COLOR = 0.1; // 水深超過 0.1m 就達到顏色漸變飽和，讓顏色變化更明顯
 
         function initThreeJS(terrainMinZ, terrainMaxZ) { // 接收地形高程範圍
             // 如果已經有 canvas 元素，先移除
@@ -183,11 +183,11 @@
             document.body.appendChild(renderer.domElement);
 
             // 環境光
-            const ambientLight = new THREE.AmbientLight(0x606060); // 增加環境光強度
+            const ambientLight = new THREE.AmbientLight(0x808080); // 再次增加環境光強度，確保基礎亮度
             scene.add(ambientLight);
 
             // 方向光 (模擬太陽)
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0); // 增加方向光強度
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2); // 再次增加方向光強度
             // 光源位置動態調整，使其位於地形上方並有一定角度
             const maxTerrainDim = Math.max(terrainWidth, terrainHeight);
             const lightHeight = maxTerrainHeight * TERRAIN_Z_EXAGGERATION_FACTOR + maxTerrainDim * 1.5; // 光源高度考慮 Z 軸放大
@@ -384,7 +384,7 @@
                         // 顏色從基本藍色漸變到深藍色
                         const interpolatedColor = new THREE.Color().copy(WATER_COLOR_BASE).lerp(WATER_COLOR_DEEP, ratio);
                         material.color.copy(interpolatedColor);
-                        material.opacity = Math.min(0.3 + ratio * 0.6, 0.9); // 透明度隨水深增加，最小從 0.3 開始，確保可見
+                        material.opacity = Math.min(0.5 + ratio * 0.4, 0.9); // 透明度隨水深增加，最小從 0.5 開始，確保可見
                     } else {
                         material.opacity = 0; // 沒有水就完全透明
                     }
